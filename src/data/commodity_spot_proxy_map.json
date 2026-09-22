@@ -1,0 +1,14 @@
+{
+  "ZC": {"symbol": "CORN", "exchange": "SMART", "currency": "USD", "name": "CORN ETF", "secType": "STK"},
+  "ZW": {"symbol": "WEAT", "exchange": "SMART", "currency": "USD", "name": "WEAT ETF", "secType": "STK"},
+  "ZS": {"symbol": "SOYB", "exchange": "SMART", "currency": "USD", "name": "SOYB ETF", "secType": "STK"},
+  "C": {"symbol": "CORN", "exchange": "SMART", "currency": "USD", "name": "CORN ETF", "secType": "STK"},
+  "W": {"symbol": "WEAT", "exchange": "SMART", "currency": "USD", "name": "WHEAT ETF", "secType": "STK"},
+  "S": {"symbol": "SOYB", "exchange": "SMART", "currency": "USD", "name": "SOYBEANS ETF", "secType": "STK"},
+  "ZG": {"symbol": "GLD", "exchange": "SMART", "currency": "USD", "name": "GOLD ETF", "secType": "STK"},
+  "GC": {"symbol": "GLD", "exchange": "SMART", "currency": "USD", "name": "GOLD ETF", "secType": "STK"},
+  "CL": {"symbol": "USO", "exchange": "SMART", "currency": "USD", "name": "CRUDE OIL ETF", "secType": "STK"},
+  "SI": {"symbol": "SLV", "exchange": "SMART", "currency": "USD", "name": "SILVER ETF", "secType": "STK"},
+  "NG": {"symbol": "UNG", "exchange": "SMART", "currency": "USD", "name": "NATURAL GAS ETF", "secType": "STK"},
+  "CU": {"symbol": "CPER", "exchange": "SMART", "currency": "USD", "name": "COPPER ETF", "secType": "STK"}
+}

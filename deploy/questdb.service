@@ -1,0 +1,24 @@
+[Unit]
+Description=QuestDB (native, replaces questdb Docker container)
+After=network.target
+
+[Service]
+Type=simple
+User=ibkr
+Group=ibkr
+# -f = run in foreground (required so systemd can supervise it directly,
+#      instead of questdb.sh's default of forking into the background).
+# -d = data directory (equivalent of the old `questdb-data` Docker volume).
+# Confirm these flags against `questdb.sh --help` for the version you
+# installed -- they have been stable for years but double-check on upgrade.
+ExecStart=/opt/ibkr-pipeline/questdb/bin/questdb.sh start -d /opt/ibkr-pipeline/questdb-data -f
+Environment=QDB_PG_USER=admin
+# Prefer overriding QDB_PG_PASSWORD via /etc/systemd/system/questdb.service.d/override.conf
+# (systemctl edit questdb) rather than committing it here.
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/ibkr-pipeline/questdb.systemd.log
+StandardError=append:/var/log/ibkr-pipeline/questdb.systemd.log
+
+[Install]
+WantedBy=multi-user.target

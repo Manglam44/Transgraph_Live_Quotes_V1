@@ -1,0 +1,63 @@
+# Copy this to .env and fill in real values. Never commit the real .env.
+# chmod 600 it once filled in -- it holds QDB_PASSWORD and API_KEYS.
+
+# --- IBKR -----------------------------------------------------------------
+# On EC2, IB Gateway runs headless on the SAME instance (via Xvfb + IBC --
+# see deploy/DEPLOYMENT.md), so this is now a loopback address instead of
+# the old host.docker.internal used when Gateway lived on a separate
+# Windows host reached across the Docker bridge network.
+IB_HOST=127.0.0.1
+IB_PORT=7496
+IB_CONNECT_TIMEOUT_SECONDS=10
+IB_RECONNECT_MIN_BACKOFF_SECONDS=2
+IB_RECONNECT_MAX_BACKOFF_SECONDS=60
+
+# --- QuestDB ----------------------------------------------------------------
+# Also loopback now -- QuestDB runs as a native systemd service on the same
+# instance instead of a separate Docker container on a bridge network.
+QDB_HOST=127.0.0.1
+QDB_PORT=8812
+QDB_ILP_PORT=9009
+QDB_HTTP_PORT=9000
+QDB_USER=admin
+QDB_PASSWORD=change_me_before_production
+QDB_DATABASE=qdb
+USE_ILP_INGESTION=true
+
+LOCAL_TIMEZONE=Asia/Kolkata
+
+COMMODITY_EXPIRY_MONTH=202607
+REQUEST_DELAY_SECONDS=0.2
+FLUSH_INTERVAL_SECONDS=2
+BATCH_SIZE=100
+
+# --- Per-stream IBKR client IDs (must be unique per concurrent connection) --
+CLIENT_ID_COMMODITY_SPOT_ALL_LIVE=44
+CLIENT_ID_COMMODITY_SPOT_ALL_DELAYED=45
+CLIENT_ID_COMMODITY_FUTURES_ALL_LIVE=41
+CLIENT_ID_COMMODITY_FUTURES_ALL_DELAYED=43
+CLIENT_ID_COMMODITY_OPTIONS_ALL_LIVE=46
+CLIENT_ID_COMMODITY_OPTIONS_ALL_DELAYED=47
+CLIENT_ID_CURRENCY_SPOT_ALL_LIVE=40
+CLIENT_ID_CURRENCY_SPOT_ALL_DELAYED=42
+CLIENT_ID_CURRENCY_FUTURES_ALL_LIVE=48
+CLIENT_ID_CURRENCY_FUTURES_ALL_DELAYED=49
+CLIENT_ID_CURRENCY_OPTIONS_ALL_LIVE=50
+CLIENT_ID_CURRENCY_OPTIONS_ALL_DELAYED=51
+# 999 is reserved for scripts/test_ib.py -- do not reuse it for a real stream.
+
+# --- API ---------------------------------------------------------------------
+# Comma-separated list of accepted API keys. Generate with e.g.:
+#   python -c "import secrets; print(secrets.token_urlsafe(32))"
+API_KEYS=replace_with_a_long_random_key
+# Comma-separated list of allowed browser origins, e.g. https://dashboard.example.com
+# Leave empty to reject all browser cross-origin requests (server-to-server
+# calls with the API key are unaffected by CORS either way).
+API_CORS_ALLOW_ORIGINS=
+# How many uvicorn worker processes serve the API (stateless reads, so this
+# is safe to raise on a multi-vCPU instance). See orchestrator.py.
+API_WORKERS=2
+
+# --- Logging -------------------------------------------------------------
+LOG_LEVEL=INFO
+LOG_JSON=false

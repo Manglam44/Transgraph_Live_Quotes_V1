@@ -1,0 +1,200 @@
+{
+  "CORN": {
+    "symbol": "ZC",
+    "exchange": "CBOT",
+    "currency": "USD",
+    "name": "CORN",
+    "tradingClass": "ZC",
+    "multiplier": "5000",
+    "instrument_type": "future"
+  },
+  "WHEAT": {
+    "symbol": "ZW",
+    "exchange": "CBOT",
+    "currency": "USD",
+    "name": "WHEAT",
+    "tradingClass": "ZW",
+    "multiplier": "5000",
+    "instrument_type": "future"
+  },
+  "SOYBEANS": {
+    "symbol": "ZS",
+    "exchange": "CBOT",
+    "currency": "USD",
+    "name": "SOYBEANS",
+    "tradingClass": "ZS",
+    "multiplier": "5000",
+    "instrument_type": "future"
+  },
+  "SOYBEAN_OIL": {
+    "symbol": "ZL",
+    "exchange": "CBOT",
+    "currency": "USD",
+    "name": "SOYBEAN OIL",
+    "tradingClass": "ZL",
+    "multiplier": "60000",
+    "instrument_type": "future"
+  },
+  "SOYBEAN_MEAL": {
+    "symbol": "ZM",
+    "exchange": "CBOT",
+    "currency": "USD",
+    "name": "SOYBEAN MEAL",
+    "tradingClass": "ZM",
+    "multiplier": "100",
+    "instrument_type": "future"
+  },
+  "OATS": {
+    "symbol": "ZO",
+    "exchange": "CBOT",
+    "currency": "USD",
+    "name": "OATS (E)",
+    "tradingClass": "ZO",
+    "multiplier": "5000",
+    "instrument_type": "future"
+  },
+  "ROUGH_RICE": {
+    "symbol": "ZR",
+    "exchange": "CBOT",
+    "currency": "USD",
+    "name": "ROUGH RICE (E)",
+    "tradingClass": "ZR",
+    "multiplier": "2000",
+    "instrument_type": "future"
+  },
+  "LIVE_CATTLE": {
+    "symbol": "LE",
+    "exchange": "CME",
+    "currency": "USD",
+    "name": "LIVE CATTLE",
+    "tradingClass": "LE",
+    "multiplier": "40000",
+    "instrument_type": "future"
+  },
+  "LEAN_HOGS": {
+    "symbol": "HE",
+    "exchange": "CME",
+    "currency": "USD",
+    "name": "LEAN HOGS",
+    "tradingClass": "HE",
+    "multiplier": "40000",
+    "instrument_type": "future"
+  },
+  "FEEDER_CATTLE": {
+    "symbol": "GF",
+    "exchange": "CME",
+    "currency": "USD",
+    "name": "FEEDER CATTLE",
+    "tradingClass": "GF",
+    "multiplier": "50000",
+    "instrument_type": "future"
+  },
+  "GOLD": {
+    "symbol": "GC",
+    "exchange": "COMEX",
+    "currency": "USD",
+    "name": "GOLD",
+    "tradingClass": "GC",
+    "multiplier": "100",
+    "instrument_type": "future"
+  },
+  "SILVER": {
+    "symbol": "SI",
+    "exchange": "COMEX",
+    "currency": "USD",
+    "name": "SILVER",
+    "tradingClass": "SI",
+    "multiplier": "5000",
+    "instrument_type": "future"
+  },
+  "COPPER": {
+    "symbol": "HG",
+    "exchange": "COMEX",
+    "currency": "USD",
+    "name": "COPPER",
+    "tradingClass": "HG",
+    "multiplier": "25000",
+    "instrument_type": "future"
+  },
+  "WTI_CRUDE_OIL": {
+    "symbol": "CL",
+    "exchange": "NYMEX",
+    "currency": "USD",
+    "name": "CRUDE OIL",
+    "tradingClass": "CL",
+    "multiplier": "1000",
+    "instrument_type": "future"
+  },
+  "NATURAL_GAS": {
+    "symbol": "NG",
+    "exchange": "NYMEX",
+    "currency": "USD",
+    "name": "NATURAL GAS",
+    "tradingClass": "NG",
+    "multiplier": "10000",
+    "instrument_type": "future"
+  },
+  "HEATING_OIL": {
+    "symbol": "HO",
+    "exchange": "NYMEX",
+    "currency": "USD",
+    "name": "HEATING OIL",
+    "tradingClass": "HO",
+    "multiplier": "42000",
+    "instrument_type": "future"
+  },
+  "RBOB_GASOLINE": {
+    "symbol": "RB",
+    "exchange": "NYMEX",
+    "currency": "USD",
+    "name": "RBOB GASOLINE",
+    "tradingClass": "RB",
+    "multiplier": "42000",
+    "instrument_type": "future"
+  },
+  "COCOA": {
+    "symbol": "CC",
+    "exchange": "NYBOT",
+    "currency": "USD",
+    "name": "COCOA",
+    "tradingClass": "CC",
+    "multiplier": "10",
+    "instrument_type": "future"
+  },
+  "COFFEE": {
+    "symbol": "KC",
+    "exchange": "NYBOT",
+    "currency": "USD",
+    "name": "COFFEE C",
+    "tradingClass": "KC",
+    "multiplier": "37500",
+    "instrument_type": "future"
+  },
+  "SUGAR": {
+    "symbol": "SB",
+    "exchange": "NYBOT",
+    "currency": "USD",
+    "name": "SUGAR NO. 11",
+    "tradingClass": "SB",
+    "multiplier": "112000",
+    "instrument_type": "future"
+  },
+  "COTTON": {
+    "symbol": "CT",
+    "exchange": "NYBOT",
+    "currency": "USD",
+    "name": "COTTON NO. 2",
+    "tradingClass": "CT",
+    "multiplier": "50000",
+    "instrument_type": "future"
+  },
+  "FCOJ": {
+    "symbol": "OJ",
+    "exchange": "NYBOT",
+    "currency": "USD",
+    "name": "FCOJ-A",
+    "tradingClass": "OJ",
+    "multiplier": "15000",
+    "instrument_type": "future"
+  }
+}

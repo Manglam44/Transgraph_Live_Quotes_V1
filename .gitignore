@@ -1,0 +1,30 @@
+# Python bytecode cache -- always auto-regenerated, never needed, and a
+# stale .pyc alongside an edited .py has caused real "why isn't my fix
+# working" confusion before. Never commit, never share, never deploy.
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment -- rebuilt from requirements.txt on every machine,
+# never copied between machines.
+venv/
+.venv/
+
+# Secrets -- never commit your real .env. Only _env.example (no secrets)
+# is tracked.
+.env
+*.env
+!_env.example
+
+# Logs
+logs/
+*.log
+
+# QuestDB local data directory (if run from inside the project folder)
+questdb-data/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

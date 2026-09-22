@@ -1,0 +1,29 @@
+[Unit]
+Description=IBKR Market Data Pipeline -- Python orchestrator (API + streamers)
+After=network-online.target questdb.service ibgateway.service
+Wants=network-online.target
+# Not a hard Requires=: if Gateway is mid-restart (e.g. its daily 23:45 ET
+# reset), the orchestrator should keep running -- each streamer's own
+# reconnect/backoff logic (src/common/base_streamer.py) handles that,
+# exactly as it did against the old Windows-hosted Gateway.
+
+[Service]
+Type=simple
+User=ibkr
+Group=ibkr
+WorkingDirectory=/opt/ibkr-pipeline/app
+Environment=IBKR_APP_DIR=/opt/ibkr-pipeline/app
+Environment=IBKR_LOG_DIR=/var/log/ibkr-pipeline
+Environment=IBKR_PYTHON=/opt/ibkr-pipeline/venv/bin/python
+ExecStart=/opt/ibkr-pipeline/venv/bin/python -u /opt/ibkr-pipeline/app/orchestrator.py
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+# Give children (streamers flushing buffered rows) room to shut down
+# cleanly before systemd would otherwise send SIGKILL itself.
+TimeoutStopSec=30
+StandardOutput=append:/var/log/ibkr-pipeline/orchestrator.systemd.log
+StandardError=append:/var/log/ibkr-pipeline/orchestrator.systemd.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+{
+  "EUR": {"symbol": "6E", "exchange": "CME", "currency": "USD", "name": "EUR OPTION", "tradingClass": "EUU", "multiplier": "125000", "strike": 1.10, "right": "C"},
+  "GBP": {"symbol": "6B", "exchange": "CME", "currency": "USD", "name": "GBP OPTION", "tradingClass": "GBU", "multiplier": "62500", "strike": 1.30, "right": "C"},
+  "JPY": {"symbol": "6J", "exchange": "CME", "currency": "USD", "name": "JPY OPTION", "tradingClass": "JPU", "multiplier": "12500000", "strike": 0.0070, "right": "C"},
+  "CAD": {"symbol": "6C", "exchange": "CME", "currency": "USD", "name": "CAD OPTION", "tradingClass": "CAU", "multiplier": "100000", "strike": 0.75, "right": "C"},
+  "AUD": {"symbol": "6A", "exchange": "CME", "currency": "USD", "name": "AUD OPTION", "tradingClass": "ADU", "multiplier": "100000", "strike": 0.65, "right": "C"}
+}

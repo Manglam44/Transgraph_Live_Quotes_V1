@@ -1,0 +1,21 @@
+[Unit]
+Description=IB Gateway (headless, via Xvfb + IBC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ibkr
+Group=ibkr
+ExecStart=/opt/ibkr-pipeline/app/deploy/start_ibgateway.sh
+Restart=always
+RestartSec=15
+# Gateway needs time to fully log in before it's considered "up"; the
+# orchestrator's wait_for_port() tolerates this independently, but give
+# systemd some patience too so a slow login isn't treated as a crash loop.
+TimeoutStartSec=120
+StandardOutput=append:/var/log/ibkr-pipeline/ibgateway.systemd.log
+StandardError=append:/var/log/ibkr-pipeline/ibgateway.systemd.log
+
+[Install]
+WantedBy=multi-user.target

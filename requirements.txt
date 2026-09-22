@@ -1,0 +1,23 @@
+# No requirements.txt existed in the original project -- these versions are
+# pinned to known-good releases as of writing. After first install, run
+# `pip freeze > requirements.lock.txt` in your environment and commit that
+# too, so a future `pip install` can't silently pull in a breaking release.
+
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.32,<0.33
+pydantic>=2.9,<3.0
+
+# ib_insync: last released 0.9.86 (project is effectively unmaintained
+# upstream). It still works fine against current IBKR API versions, but if
+# you hit compatibility issues down the line, `ib_async` is the actively
+# maintained community fork with a near-identical API -- worth planning a
+# migration to it eventually rather than an emergency one.
+ib_insync==0.9.86
+
+psycopg2-binary>=2.9,<3.0
+
+# Official QuestDB Python client, used for fast ILP tick ingestion
+# (src/common/questdb.py's _IlpBatchWriter).
+questdb>=2.0,<3.0
+
+python-dotenv>=1.0,<2.0
