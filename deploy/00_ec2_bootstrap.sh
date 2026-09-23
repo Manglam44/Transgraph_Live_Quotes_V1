@@ -29,13 +29,13 @@ mkdir -p "$LOG_DIR"
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$BASE_DIR" "$LOG_DIR"
 
 echo "== 3/6: QuestDB (native binary, no Docker) =="
-if [ ! -f "$BASE_DIR/questdb/bin/questdb.sh" ]; then
+if [ ! -f "$BASE_DIR/questdb/questdb.sh" ]; then
     cd /tmp
     wget -q "https://github.com/questdb/questdb/releases/download/${QUESTDB_VERSION}/questdb-${QUESTDB_VERSION}-no-jre-bin.tar.gz" \
         -O questdb.tar.gz
     tar -xzf questdb.tar.gz -C "$BASE_DIR/questdb" --strip-components=1
     chown -R "$SERVICE_USER":"$SERVICE_USER" "$BASE_DIR/questdb"
-    chmod +x "$BASE_DIR/questdb/bin/questdb.sh"
+    chmod +x "$BASE_DIR/questdb/questdb.sh"
 else
     echo "   already installed, skipping"
 fi

@@ -11,7 +11,7 @@ Group=ibkr
 # -d = data directory (equivalent of the old `questdb-data` Docker volume).
 # Confirm these flags against `questdb.sh --help` for the version you
 # installed -- they have been stable for years but double-check on upgrade.
-ExecStart=/opt/ibkr-pipeline/questdb/bin/questdb.sh start -d /opt/ibkr-pipeline/questdb-data -f
+ExecStart=/opt/ibkr-pipeline/questdb/questdb.sh start -d /opt/ibkr-pipeline/questdb-data -f
 Environment=QDB_PG_USER=admin
 # Prefer overriding QDB_PG_PASSWORD via /etc/systemd/system/questdb.service.d/override.conf
 # (systemctl edit questdb) rather than committing it here.
