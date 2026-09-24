@@ -30,11 +30,77 @@ def resolve_future_fallback(ib, contract: Future):
     return sorted(contracts, key=lambda c: c.lastTradeDateOrContractMonth)[0]
 
 
+def resolve_future_chain(ib, contract: Future, months: int) -> List[Future]:
+    """Same lookup-without-a-fixed-expiry technique as resolve_future_fallback,
+    but returns the nearest `months` currently-listed contracts instead of
+    just the single nearest one -- used to subscribe to a whole near-dated
+    chain (e.g. corn's next 6 listed months) rather than guessing one."""
+    lookup = Future(
+        symbol=contract.symbol,
+        exchange=contract.exchange,
+        currency=contract.currency,
+        multiplier=contract.multiplier,
+        tradingClass=contract.tradingClass,
+    )
+    details = ib.reqContractDetails(lookup)
+    if not details:
+        return []
+
+    contracts = [d.contract for d in details if getattr(d.contract, 'lastTradeDateOrContractMonth', None)]
+    contracts.sort(key=lambda c: c.lastTradeDateOrContractMonth)
+    return contracts[:months]
+
+
 def qualify_contracts(ib, specs: Iterable[ContractSpec], request_delay_seconds: float) -> List[ContractSpec]:
     qualified: List[ContractSpec] = []
     for spec in specs:
         fallback_error = None
         label = spec.metadata.get('display_name', spec.metadata.get('display_code', spec.contract_type))
+
+        # NEW: commodity futures loaded without a pinned expiry_month are
+        # marked expand_to_chain=True by load_commodity_futures(). Instead
+        # of qualifying one (possibly wrong) contract month, fetch the
+        # nearest N currently-listed months and subscribe to all of them --
+        # this spec becomes multiple qualified specs, one per month.
+        if isinstance(spec.contract, Future) and spec.metadata.get('expand_to_chain'):
+            months = spec.metadata.get('chain_months', 6)
+            try:
+                chain = resolve_future_chain(ib, spec.contract, months)
+            except Exception as exc:
+                log.warning('SKIPPED %s -> chain lookup failed: %s', label, exc)
+                ib.sleep(request_delay_seconds)
+                continue
+
+            if not chain:
+                log.warning('SKIPPED %s -> no listed contracts found for chain expansion', label)
+                ib.sleep(request_delay_seconds)
+                continue
+
+            for contract in chain:
+                try:
+                    result = ib.qualifyContracts(contract)
+                except Exception as exc:
+                    log.warning('SKIPPED %s %s -> %s', label, contract.lastTradeDateOrContractMonth, exc)
+                    continue
+                if not result:
+                    log.warning('SKIPPED %s %s -> no contract match', label, contract.lastTradeDateOrContractMonth)
+                    continue
+
+                chain_spec = ContractSpec(
+                    contract_type=spec.contract_type,
+                    contract=result[0],
+                    metadata={**spec.metadata, 'expiry': result[0].lastTradeDateOrContractMonth},
+                )
+                qualified.append(chain_spec)
+                log.info('Qualified %s %s', label, result[0].lastTradeDateOrContractMonth)
+
+            ib.sleep(request_delay_seconds)
+            continue  # this spec is fully handled -- skip the single-contract path below
+
+        # --- existing single-contract path, unchanged, for everything else
+        # (currency futures, spot proxies, options, and any commodity future
+        # with an explicit pinned expiry_month in its JSON entry) ---
+        fallback_error = None
 
         def try_future_fallback() -> bool:
             nonlocal fallback_error

@@ -42,6 +42,16 @@ USE_ILP_INGESTION = os.getenv('USE_ILP_INGESTION', 'true').lower() == 'true'
 LOCAL_TZ = ZoneInfo(os.getenv('LOCAL_TIMEZONE', 'Asia/Kolkata'))
 
 DEFAULT_COMMODITY_EXPIRY_MONTH = os.getenv('COMMODITY_EXPIRY_MONTH', '202607')
+# NEW: nearest N currently-listed contract months to subscribe to per
+# commodity future (e.g. corn's next 6 expiries), used by
+# load_commodity_futures() / qualify_contracts()'s chain-expansion path
+# instead of guessing a single month for every symbol.
+COMMODITY_FUTURES_NEAREST_MONTHS = int(os.getenv('COMMODITY_FUTURES_NEAREST_MONTHS', '4'))
+# NEW: logs a warning (not a hard stop) if a single streamer's subscription
+# count reaches this -- IBKR commonly caps live market-data lines around
+# 100 per session without a paid add-on; this gives a heads-up in the log
+# instead of silently dropped subscriptions and IB error code 101.
+MARKET_DATA_LINE_WARNING_THRESHOLD = int(os.getenv('MARKET_DATA_LINE_WARNING_THRESHOLD', '90'))
 DEFAULT_REQUEST_DELAY_SECONDS = float(os.getenv('REQUEST_DELAY_SECONDS', '0.2'))
 DEFAULT_FLUSH_INTERVAL_SECONDS = float(os.getenv('FLUSH_INTERVAL_SECONDS', '2'))
 DEFAULT_BATCH_SIZE = int(os.getenv('BATCH_SIZE', '100'))

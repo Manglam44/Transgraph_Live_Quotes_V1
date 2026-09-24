@@ -47,6 +47,7 @@ _COLUMN_TYPES: dict[str, str] = {
     "bid_size": "DOUBLE",
     "ask_size": "DOUBLE",
     "last_size": "DOUBLE",
+    "source": "SYMBOL",   # ADD THIS LINE
 }
 
 

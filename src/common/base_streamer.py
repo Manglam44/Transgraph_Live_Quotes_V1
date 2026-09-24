@@ -4,8 +4,14 @@ import argparse
 import signal
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, Optional, Sequence
 
+from src.common.backfill import run_backfill  # NEW
+from src.common.connection_events import (  # NEW
+    ensure_connection_events_table,
+    log_connection_gap,
+)
 from src.common.ib_client import MARKET_DATA_TYPES, connect_ib_with_retry
 from src.common.logging_config import configure_logging
 from src.common.models import ContractSpec
@@ -16,6 +22,7 @@ from src.common.settings import (
     DEFAULT_COMMODITY_EXPIRY_MONTH,
     DEFAULT_FLUSH_INTERVAL_SECONDS,
     DEFAULT_REQUEST_DELAY_SECONDS,
+    MARKET_DATA_LINE_WARNING_THRESHOLD,  # NEW
 )
 from src.common.streaming import qualify_contracts, run_forever, subscribe_market_data
 from src.common.tables import get_table_name
@@ -42,6 +49,12 @@ COLUMNS = (
     'ask_size',
     'last_size',
 )
+
+# NEW: used only for backfill inserts. Adding 'source' here (and to
+# _COLUMN_TYPES in questdb.py) means ensure_table() auto-ALTERs the existing
+# table to add the column the first time a backfill writer runs -- live rows
+# are unaffected and simply leave 'source' NULL (== live).
+BACKFILL_COLUMNS = COLUMNS + ('source',)
 
 BuildRowFn = Callable[[ContractSpec, object, str], Optional[tuple]]
 LoadSpecsFn = Callable[[argparse.Namespace], Sequence[ContractSpec]]
@@ -95,14 +108,24 @@ def run_streamer(config: StreamerConfig) -> None:
 
     Handles: arg parsing, writer lifecycle, IB connect-with-retry, and an
     outer loop that reconnects and re-subscribes whenever the IB connection
-    drops -- rather than the previous behaviour of a single connect attempt
-    with no recovery path. Also handles SIGTERM/SIGINT for a clean shutdown
-    under Docker (`docker stop` sends SIGTERM; without a handler the process
-    is hard-killed after the grace period and may lose buffered rows).
+    drops. Also handles SIGTERM/SIGINT for a clean shutdown under Docker.
+
+    NEW: also tracks when a drop started (`gap_start`) and, once reconnected,
+    logs the outage to connection_events and backfills the missing window
+    from IB's historical-tick API before resubscribing to live data. The
+    backfill runs synchronously (not on a background thread) because
+    ib_insync's event loop is not safe to drive from a second thread -- if
+    you need it non-blocking later, run backfill as a separate process with
+    its own clientId instead of threading it against this `ib` instance.
     """
     log = configure_logging(f'{config.asset_class}.{config.flow}')
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
     signal.signal(signal.SIGINT, _handle_shutdown_signal)
+
+    try:
+        ensure_connection_events_table()  # NEW
+    except Exception:
+        log.warning('Could not ensure connection_events table at startup -- will retry on first gap')
 
     args = _parse_args(config)
     client_id = CLIENT_IDS[(config.asset_class, config.flow, args.mode)]
@@ -113,6 +136,8 @@ def run_streamer(config: StreamerConfig) -> None:
 
     writer = get_batch_writer(table_name, COLUMNS, args.batch_size, args.flush_interval_seconds)
 
+    gap_start: Optional[datetime] = None  # NEW: set the moment a drop is detected
+
     try:
         while not _should_stop():
             try:
@@ -120,6 +145,16 @@ def run_streamer(config: StreamerConfig) -> None:
             except Exception:
                 log.exception('Unrecoverable error establishing IB connection')
                 break
+
+            # NEW: we just reconnected after a drop -- log the gap now (both
+            # ends are known) and hang onto the window so we can backfill it
+            # once we have a qualified contract list to fetch ticks for.
+            recovered_gap: Optional[tuple[datetime, datetime]] = None
+            if gap_start is not None:
+                reconnected_at = datetime.now(timezone.utc)
+                log_connection_gap(config.asset_class, config.flow, args.mode, gap_start, reconnected_at)
+                recovered_gap = (gap_start, reconnected_at)
+                gap_start = None  # cleared here; recomputed again below if it drops again
 
             try:
                 specs = config.load_specs(args)
@@ -133,6 +168,35 @@ def run_streamer(config: StreamerConfig) -> None:
                     )
                     time.sleep(config.no_contracts_retry_seconds)
                     continue
+
+                # NEW: chain expansion (nearest N months per commodity
+                # future) can push this well past typical IBKR market-data
+                # line limits (commonly ~100/session without a paid
+                # add-on). This doesn't block anything -- just gives you a
+                # clear log line instead of a silent dropped subscription
+                # and error code 101 "Max number of tickers has been
+                # reached" showing up with no obvious cause.
+                if len(qualified) >= MARKET_DATA_LINE_WARNING_THRESHOLD:
+                    log.warning(
+                        '%s %s is requesting %d market data lines -- approaching typical '
+                        'IBKR limits. If you see error code 101 ("Max number of tickers has '
+                        'been reached"), reduce COMMODITY_FUTURES_NEAREST_MONTHS or request '
+                        'additional market data lines from IBKR.',
+                        config.asset_class, config.flow, len(qualified),
+                    )
+
+                # NEW: run the backfill for the window we just closed, now
+                # that we have a freshly-qualified contract list. Runs
+                # inline, before resubscribing, for the thread-safety reason
+                # noted in the docstring above.
+                if recovered_gap is not None:
+                    start_dt, end_dt = recovered_gap
+                    run_backfill(
+                        ib, qualified,
+                        config.asset_class, config.flow, args.mode,
+                        table_name, BACKFILL_COLUMNS,
+                        start_dt, end_dt,
+                    )
 
                 subscribe_market_data(
                     ib,
@@ -148,6 +212,7 @@ def run_streamer(config: StreamerConfig) -> None:
                     ib.disconnect()
 
             if not _should_stop():
+                gap_start = datetime.now(timezone.utc)  # NEW: mark when this drop started
                 log.warning('Connection dropped -- reconnecting and re-subscribing')
     finally:
         writer.close()

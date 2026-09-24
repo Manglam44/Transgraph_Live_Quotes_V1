@@ -11,9 +11,12 @@ over ALL_ROUTERS and mounts whatever is registered here.
 """
 from __future__ import annotations
 
+from src.api.routers.live_ws import router as live_ws_router
 from src.api.routers.questdb_api import router as questdb_router
+from src.api.routers.historical import router as historical_router
 
 ALL_ROUTERS = [
     questdb_router,
-    # new_router,  # <- add future routers here
+    live_ws_router,
+    historical_router,
 ]

@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.live_feed import hub  # NEW
 from src.api.routers import ALL_ROUTERS
 from src.common.logging_config import configure_logging
 from src.common.questdb import connect_questdb
@@ -34,6 +35,13 @@ app.add_middleware(
 # this file. See src/api/routers/__init__.py for the "how to add one" note.
 for router in ALL_ROUTERS:
     app.include_router(router)
+
+
+@app.on_event('shutdown')  # NEW
+async def _shutdown_live_feed() -> None:
+    """Cancels any running QuestDB poll loops (see live_feed.py) so a
+    reload/shutdown doesn't leave a background task orphaned."""
+    hub.shutdown()
 
 
 @app.get('/health', tags=['health'])
