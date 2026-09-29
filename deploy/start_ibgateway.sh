@@ -47,7 +47,7 @@ clear_auth_state() {
 
 export DISPLAY=:99
 
-IBGATEWAY_HOME="/opt/ibkr-pipeline/ibgateway/Jts/ibgateway"
+IBGATEWAY_HOME="/opt/ibkr-pipeline/ibgateway/Jts/ibgateway/1045"
 IBC_HOME="/opt/ibkr-pipeline/ibgateway/ibc"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
