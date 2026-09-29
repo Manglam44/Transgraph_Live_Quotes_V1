@@ -28,3 +28,4 @@ questdb-data/
 Thumbs.db
 .vscode/
 .idea/
+deploy/start_ibgateway.sh.bak_*

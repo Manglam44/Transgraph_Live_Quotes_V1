@@ -22,14 +22,45 @@ XVFB_PID=$!
 trap 'kill "$XVFB_PID" 2>/dev/null || true' EXIT
 sleep 2
 
-# IBC drives IB Gateway's login/2FA/dialog-dismissal automatically using
-# config.ini, and restarts Gateway itself on the ~23:45 ET daily reset.
-"$IBC_HOME/scripts/ibcstart.sh" \
-    --gateway \
-    --mode=live \
-    --tws-path="$IBGATEWAY_HOME" \
-    --ibc-path="$IBC_HOME" \
-    --ibc-ini="$IBC_HOME/config.ini"
+# IBC drives IB Gateway's login/2FA/dialog-dismissal automatically.
+#
+# IBC returns exit code 87 when the second-factor authentication dialog
+# times out (1111 % 256). We wait 5 minutes before starting a new
+# authentication attempt.
 
-# ibcstart.sh blocks until Gateway exits; when it does, let systemd decide
-# whether to restart (see ibgateway.service's Restart=).
+TWOFA_TIMEOUT_EXIT_CODE=87
+
+RECOVERY_CONFIG="$(dirname "$0")/ibgateway-recovery.conf"
+
+if [[ -f "$RECOVERY_CONFIG" ]]; then
+    # shellcheck disable=SC1090
+    source "$RECOVERY_CONFIG"
+fi
+
+TWOFA_RETRY_WAIT_SECONDS="${IBKR_2FA_NO_RESPONSE_WAIT_SECONDS:-300}"
+
+while true; do
+    set +e
+
+    "$IBC_HOME/scripts/ibcstart.sh" \
+        1045 \
+        --gateway \
+        --mode=live \
+        --tws-path="$IBGATEWAY_HOME" \
+        --ibc-path="$IBC_HOME" \
+        --ibc-ini="$IBC_HOME/config.ini"
+
+    EXIT_CODE=$?
+
+    set -e
+
+    if [[ "$EXIT_CODE" -eq "$TWOFA_TIMEOUT_EXIT_CODE" ]]; then
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') [ibgateway] 2FA timed out; waiting ${TWOFA_RETRY_WAIT_SECONDS}s before retry"
+        sleep "$TWOFA_RETRY_WAIT_SECONDS"
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') [ibgateway] retrying IBC authentication"
+        continue
+    fi
+
+    echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') [ibgateway] IBC exited with code ${EXIT_CODE}; returning to systemd"
+    exit "$EXIT_CODE"
+done
