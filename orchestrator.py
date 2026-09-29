@@ -106,22 +106,22 @@ def build_specs() -> list[ProcSpec]:
             "--workers", str(API_WORKERS),
         ]),
         ProcSpec("streamer-commodity-spot", [
-            PYTHON, "-u", "-m", "src.streamers.commodity_spot", "--mode", "delayed",
+            PYTHON, "-u", "-m", "src.streamers.commodity_spot", "--mode", "live",
         ]),
         ProcSpec("streamer-commodity-futures", [
             PYTHON, "-u", "-m", "src.streamers.commodity_futures", "--mode", "live",
         ]),
         ProcSpec("streamer-commodity-options", [
-            PYTHON, "-u", "-m", "src.streamers.commodity_options", "--mode", "delayed",
+            PYTHON, "-u", "-m", "src.streamers.commodity_options", "--mode", "live",
         ]),
         ProcSpec("streamer-currency-spot", [
             PYTHON, "-u", "-m", "src.streamers.currency_spot", "--mode", "live",
         ]),
         ProcSpec("streamer-currency-futures", [
-            PYTHON, "-u", "-m", "src.streamers.currency_futures", "--mode", "delayed",
+            PYTHON, "-u", "-m", "src.streamers.currency_futures", "--mode", "live",
         ]),
         ProcSpec("streamer-currency-options", [
-            PYTHON, "-u", "-m", "src.streamers.currency_options", "--mode", "delayed",
+            PYTHON, "-u", "-m", "src.streamers.currency_options", "--mode", "live",
         ]),
     ]
 
