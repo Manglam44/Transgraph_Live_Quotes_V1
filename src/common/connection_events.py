@@ -17,17 +17,38 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
     flow SYMBOL,
     mode SYMBOL,
     gap_seconds DOUBLE,
-    backfill_status SYMBOL
+    backfill_status SYMBOL,
+    status SYMBOL
 ) TIMESTAMP(disconnected_at) PARTITION BY MONTH WAL
 """
 
 
+def _execute(sql: str, params: tuple, what: str):
+    """Run one statement. Returns rowcount, or None if it failed."""
+    conn = connect_questdb()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        conn.commit()
+        rowcount = cur.rowcount
+        cur.close()
+        return rowcount
+    except Exception:
+        conn.rollback()
+        log.exception('Failed to %s', what)
+        return None
+    finally:
+        conn.close()
+
+
 def ensure_connection_events_table() -> None:
-    """Call once at streamer startup. Cheap / idempotent."""
+    """Call once at streamer startup. Idempotent. Adds `status` to older tables."""
     conn = connect_questdb()
     try:
         cur = conn.cursor()
         cur.execute(_DDL)
+        conn.commit()
+        cur.execute(f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS status SYMBOL")
         conn.commit()
         cur.close()
     except Exception:
@@ -38,6 +59,18 @@ def ensure_connection_events_table() -> None:
         conn.close()
 
 
+def log_connection_open(asset_class: str, flow: str, mode: str, disconnected_at: datetime) -> None:
+    """Insert an OPEN row the moment a disconnect is detected."""
+    _execute(
+        f"INSERT INTO {TABLE_NAME} "
+        f"(disconnected_at, reconnected_at, asset_class, flow, mode, gap_seconds, backfill_status, status) "
+        f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (disconnected_at, None, asset_class, flow, mode, None, 'none', 'OPEN'),
+        f'insert OPEN connection event for {asset_class}/{flow}/{mode}',
+    )
+    log.warning('Connection OPEN event logged for %s/%s/%s at %s', asset_class, flow, mode, disconnected_at)
+
+
 def log_connection_gap(
     asset_class: str,
     flow: str,
@@ -45,35 +78,37 @@ def log_connection_gap(
     disconnected_at: datetime,
     reconnected_at: datetime,
 ) -> None:
-    """Record one completed outage.
-
-    Called ONLY after a successful reconnect, i.e. once both timestamps are
-    known. This deliberately avoids an "open row that gets UPDATEd later"
-    design: if the process is killed mid-outage there is simply no row for
-    that boundary (rather than a permanently-open one lying around), and the
-    next reconnect after restart will log whatever gap it actually observes.
-    """
+    """Close the OPEN row (status RECOVERED). If no OPEN row exists, insert a full one."""
     gap_seconds = (reconnected_at - disconnected_at).total_seconds()
-    conn = connect_questdb()
-    try:
-        cur = conn.cursor()
-        cur.execute(
+    rowcount = _execute(
+        f"UPDATE {TABLE_NAME} SET reconnected_at = %s, gap_seconds = %s, "
+        f"status = 'RECOVERED', backfill_status = 'pending' "
+        f"WHERE disconnected_at = %s AND asset_class = %s AND flow = %s AND mode = %s",
+        (reconnected_at, gap_seconds, disconnected_at, asset_class, flow, mode),
+        f'update connection event for {asset_class}/{flow}/{mode}',
+    )
+    if rowcount == 0:  # no OPEN row was found -> record the whole outage now
+        _execute(
             f"INSERT INTO {TABLE_NAME} "
-            f"(disconnected_at, reconnected_at, asset_class, flow, mode, gap_seconds, backfill_status) "
-            f"VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (disconnected_at, reconnected_at, asset_class, flow, mode, gap_seconds, 'pending'),
+            f"(disconnected_at, reconnected_at, asset_class, flow, mode, gap_seconds, backfill_status, status) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (disconnected_at, reconnected_at, asset_class, flow, mode, gap_seconds, 'pending', 'RECOVERED'),
+            f'insert connection gap for {asset_class}/{flow}/{mode}',
         )
-        conn.commit()
-        cur.close()
-        log.warning(
-            'Connection gap logged for %s/%s/%s: %.1fs (%s -> %s)',
-            asset_class, flow, mode, gap_seconds, disconnected_at, reconnected_at,
-        )
-    except Exception:
-        conn.rollback()
-        log.exception('Failed to record connection gap for %s/%s/%s', asset_class, flow, mode)
-    finally:
-        conn.close()
+    log.warning(
+        'Connection RECOVERED for %s/%s/%s: %.1fs (%s -> %s)',
+        asset_class, flow, mode, gap_seconds, disconnected_at, reconnected_at,
+    )
+
+
+def close_stale_open_events(asset_class: str, flow: str, mode: str) -> None:
+    """At streamer startup: any OPEN row left by a killed process becomes ABANDONED."""
+    _execute(
+        f"UPDATE {TABLE_NAME} SET status = 'ABANDONED' "
+        f"WHERE status = 'OPEN' AND asset_class = %s AND flow = %s AND mode = %s",
+        (asset_class, flow, mode),
+        'close stale OPEN connection events',
+    )
 
 
 def mark_backfill_status(
@@ -83,20 +118,10 @@ def mark_backfill_status(
     mode: str,
     status: str,
 ) -> None:
-    """status: 'done' | 'failed' | 'partial'. QuestDB supports UPDATE on WAL
-    tables; this table is low-volume so the cost is irrelevant."""
-    conn = connect_questdb()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            f"UPDATE {TABLE_NAME} SET backfill_status = %s "
-            f"WHERE disconnected_at = %s AND asset_class = %s AND flow = %s AND mode = %s",
-            (status, disconnected_at, asset_class, flow, mode),
-        )
-        conn.commit()
-        cur.close()
-    except Exception:
-        conn.rollback()
-        log.exception('Failed to update backfill_status for gap at %s', disconnected_at)
-    finally:
-        conn.close()
+    """status: 'done' | 'failed' | 'partial'."""
+    _execute(
+        f"UPDATE {TABLE_NAME} SET backfill_status = %s "
+        f"WHERE disconnected_at = %s AND asset_class = %s AND flow = %s AND mode = %s",
+        (status, disconnected_at, asset_class, flow, mode),
+        f'update backfill_status for gap at {disconnected_at}',
+    )

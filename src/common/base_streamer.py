@@ -26,6 +26,7 @@ from src.common.settings import (
 )
 from src.common.streaming import qualify_contracts, run_forever, subscribe_market_data
 from src.common.tables import get_table_name
+from src.common.connection_events import close_stale_open_events, log_connection_open
 
 COLUMNS = (
     'quote_time',
@@ -133,6 +134,7 @@ def run_streamer(config: StreamerConfig) -> None:
     # for the same asset class now land in separate tables.
     table_name = get_table_name(config.asset_class, args.mode)
     log.info('Writing to table %s', table_name)
+    close_stale_open_events(config.asset_class, config.flow, args.mode)
 
     writer = get_batch_writer(table_name, COLUMNS, args.batch_size, args.flush_interval_seconds)
 
@@ -207,12 +209,15 @@ def run_streamer(config: StreamerConfig) -> None:
                 )
                 log.info('Listening for %s %s (%s)', config.asset_class, config.flow, args.mode)
                 run_forever(ib, writer, should_stop=_should_stop)
+            except (ConnectionError, OSError) as exc:
+                log.warning('IB socket dropped (%s) -- will reconnect and backfill', exc)
             finally:
                 if ib.isConnected():
                     ib.disconnect()
 
             if not _should_stop():
                 gap_start = datetime.now(timezone.utc)  # NEW: mark when this drop started
+                log_connection_open(config.asset_class, config.flow, args.mode, gap_start)
                 log.warning('Connection dropped -- reconnecting and re-subscribing')
     finally:
         writer.close()
