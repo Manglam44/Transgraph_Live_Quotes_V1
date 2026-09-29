@@ -106,7 +106,7 @@ def build_specs() -> list[ProcSpec]:
             "--workers", str(API_WORKERS),
         ]),
         ProcSpec("streamer-commodity-spot", [
-            PYTHON, "-u", "-m", "src.streamers.commodity_spot", "--mode", "live",
+            PYTHON, "-u", "-m", "src.streamers.commodity_spot", "--mode", "delayed",
         ]),
         ProcSpec("streamer-commodity-futures", [
             PYTHON, "-u", "-m", "src.streamers.commodity_futures", "--mode", "live",
