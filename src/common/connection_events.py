@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.common.questdb import connect_questdb
 
@@ -23,12 +23,19 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
 """
 
 
+def _naive(v):
+    """QuestDB PG wire rejects tz-aware datetimes; send naive UTC instead."""
+    if isinstance(v, datetime) and v.tzinfo is not None:
+        return v.astimezone(timezone.utc).replace(tzinfo=None)
+    return v
+
+
 def _execute(sql: str, params: tuple, what: str):
     """Run one statement. Returns rowcount, or None if it failed."""
     conn = connect_questdb()
     try:
         cur = conn.cursor()
-        cur.execute(sql, params)
+        cur.execute(sql, tuple(_naive(p) for p in params))
         conn.commit()
         rowcount = cur.rowcount
         cur.close()
@@ -48,8 +55,11 @@ def ensure_connection_events_table() -> None:
         cur = conn.cursor()
         cur.execute(_DDL)
         conn.commit()
-        cur.execute(f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS status SYMBOL")
-        conn.commit()
+        cur.execute(f"select \"column\" from table_columns('{TABLE_NAME}')")
+        existing = {row[0] for row in cur.fetchall()}
+        if 'status' not in existing:
+            cur.execute(f"ALTER TABLE {TABLE_NAME} ADD COLUMN status SYMBOL")
+            conn.commit()
         cur.close()
     except Exception:
         conn.rollback()
@@ -61,14 +71,15 @@ def ensure_connection_events_table() -> None:
 
 def log_connection_open(asset_class: str, flow: str, mode: str, disconnected_at: datetime) -> None:
     """Insert an OPEN row the moment a disconnect is detected."""
-    _execute(
+    ok = _execute(
         f"INSERT INTO {TABLE_NAME} "
         f"(disconnected_at, reconnected_at, asset_class, flow, mode, gap_seconds, backfill_status, status) "
         f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
         (disconnected_at, None, asset_class, flow, mode, None, 'none', 'OPEN'),
         f'insert OPEN connection event for {asset_class}/{flow}/{mode}',
     )
-    log.warning('Connection OPEN event logged for %s/%s/%s at %s', asset_class, flow, mode, disconnected_at)
+    if ok is not None:
+        log.warning('Connection OPEN event logged for %s/%s/%s at %s', asset_class, flow, mode, disconnected_at)
 
 
 def log_connection_gap(
