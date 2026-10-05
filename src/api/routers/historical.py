@@ -17,23 +17,54 @@ log = logging.getLogger(__name__)
 
 Mode = Literal["live", "delayed"]
 Order = Literal["asc", "desc"]
+AssetGroup = Literal["commodity", "currency"]
 
 IST = ZoneInfo("Asia/Kolkata")
 
-# The streamers store quote_time as the IST wall clock with no timezone
-# (labelled UTC in QuestDB). ticker_time is real UTC.
-#   0 (default) -> legacy behaviour: quote_time is treated as UTC, then shifted
-#                  to IST (response quote_time is 5.5h later than reality).
-#   1           -> quote_time is treated as IST. Responses and filters are
-#                  correct. Enable only after checking the frontend does not
-#                  compensate for the old shift.
-QUOTE_TIME_IS_IST = os.getenv("HISTORICAL_QUOTE_TIME_IS_IST", "0") == "1"
+# ============================================================
+# Quote Time Configuration
+# ============================================================
+#
+# The streamers store quote_time as the IST wall clock with no
+# timezone information, while ticker_time is real UTC.
+#
+# 0 (default):
+#     quote_time is treated as UTC and converted to IST.
+#
+# 1:
+#     quote_time is treated as IST.
+#
+# Enable only after confirming the frontend does not compensate
+# for the old timezone shift.
+#
+# ============================================================
+
+QUOTE_TIME_IS_IST = os.getenv(
+    "HISTORICAL_QUOTE_TIME_IS_IST",
+    "0",
+) == "1"
+
 STORE_TZ = IST if QUOTE_TIME_IS_IST else timezone.utc
 
 MAX_LIMIT = 50_000
 
-# SAMPLE BY units: s, m, h, d. Whitelisted because it cannot be parameterised.
-_INTERVALS = {"1s", "10s", "1m", "5m", "15m", "1h", "1d"}
+# QuestDB SAMPLE BY units.
+# This is intentionally whitelisted because SQL identifiers/
+# clauses cannot be safely parameterized.
+_INTERVALS = {
+    "1s",
+    "10s",
+    "1m",
+    "5m",
+    "15m",
+    "1h",
+    "1d",
+}
+
+
+# ============================================================
+# Router
+# ============================================================
 
 router = APIRouter(
     prefix="/historical",
@@ -43,13 +74,25 @@ router = APIRouter(
 
 
 # ============================================================
-# Timestamps
+# Timestamp Helpers
 # ============================================================
 
 def _to_ist(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Convert quote_time and ticker_time values to Asia/Kolkata
+    ISO-8601 strings.
+
+    quote_time:
+        Uses HISTORICAL_QUOTE_TIME_IS_IST configuration.
+
+    ticker_time:
+        Always treated as UTC when stored without timezone.
+    """
+
     for row in rows:
         for field in ("quote_time", "ticker_time"):
             value = row.get(field)
+
             if not isinstance(value, datetime):
                 continue
 
@@ -64,196 +107,651 @@ def _to_ist(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def _parse_bound(value: str, *, end: bool) -> tuple[datetime, str]:
-    """Convert a query-string bound to a naive datetime in quote_time's
-    storage convention. Returns (datetime, sql_operator).
-
-    - "2026-10-05"           -> an IST calendar day (start: 00:00 IST,
-                                end: next day 00:00 IST, exclusive).
-    - "2026-10-05T10:00:00Z" -> exact instant (offset honoured, inclusive).
-    - no offset              -> same convention as storage (UTC by default,
-                                IST when HISTORICAL_QUOTE_TIME_IS_IST=1).
+def _parse_bound(
+    value: str,
+    *,
+    end: bool,
+) -> tuple[datetime, str]:
     """
+    Convert a query-string timestamp into a naive datetime
+    matching the quote_time storage convention.
+
+    Supported examples:
+
+        2026-10-05
+
+        2026-10-05T10:00:00
+
+        2026-10-05T10:00:00Z
+
+        2026-10-05T10:00:00+05:30
+
+    Date-only values are interpreted as an IST calendar day.
+
+    For example:
+
+        start_time=2026-10-05
+
+    means:
+
+        >= 2026-10-05 00:00:00 IST
+
+    and:
+
+        end_time=2026-10-05
+
+    means:
+
+        < 2026-10-06 00:00:00 IST
+    """
+
     raw = value.strip()
 
     try:
+        # ----------------------------------------------------
+        # Date-only input
+        # ----------------------------------------------------
         if len(raw) == 10:
             day = date.fromisoformat(raw)
+
             if end:
                 day += timedelta(days=1)
-            local = datetime.combine(day, time.min, tzinfo=IST)
-            return local.astimezone(STORE_TZ).replace(tzinfo=None), "<" if end else ">="
 
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            local = datetime.combine(
+                day,
+                time.min,
+                tzinfo=IST,
+            )
+
+            return (
+                local.astimezone(STORE_TZ).replace(tzinfo=None),
+                "<" if end else ">=",
+            )
+
+        # ----------------------------------------------------
+        # Full ISO timestamp
+        # ----------------------------------------------------
+        parsed = datetime.fromisoformat(
+            raw.replace("Z", "+00:00")
+        )
+
     except ValueError:
-        raise HTTPException(status_code=422, detail=f"Invalid timestamp: {value!r}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid timestamp: {value!r}",
+        )
 
+    # Timestamp without timezone:
+    # treat it according to the storage convention.
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=STORE_TZ)
 
-    return parsed.astimezone(STORE_TZ).replace(tzinfo=None), "<=" if end else ">="
+    return (
+        parsed.astimezone(STORE_TZ).replace(tzinfo=None),
+        "<=" if end else ">=",
+    )
 
 
 # ============================================================
-# Helpers
+# QuestDB Helpers
 # ============================================================
 
-def _run_query(sql: str, params: tuple) -> list[dict[str, Any]]:
+def _run_query(
+    sql: str,
+    params: tuple[Any, ...],
+) -> list[dict[str, Any]]:
+    """
+    Execute a QuestDB query and return rows as dictionaries.
+    """
+
     conn = None
+
     try:
         conn = connect_questdb()
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
+
         return [dict(row) for row in rows]
+
     except Exception:
-        log.exception("Historical QuestDB query failed: %s", sql)
-        raise HTTPException(status_code=502, detail="Query against QuestDB failed.")
+        log.exception(
+            "Historical QuestDB query failed: %s",
+            sql,
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail="Query against QuestDB failed.",
+        )
+
     finally:
         if conn is not None:
             conn.close()
 
 
-def _resolve_table(mode: str) -> str:
-    table_name = TABLES.get(("commodity", mode))
+def _resolve_table(
+    asset_group: AssetGroup,
+    mode: Mode,
+) -> str:
+    """
+    Resolve the QuestDB table from the server-side TABLES mapping.
+
+    The frontend never provides a table name.
+
+    Examples:
+
+        commodity + live
+            -> commodity_live
+
+        commodity + delayed
+            -> commodity_delayed
+
+        currency + live
+            -> currency_live
+
+        currency + delayed
+            -> currency_delayed
+    """
+
+    normalized_asset_group = asset_group.strip().lower()
+    normalized_mode = mode.strip().lower()
+
+    table_name = TABLES.get(
+        (
+            normalized_asset_group,
+            normalized_mode,
+        )
+    )
+
     if table_name is None:
         raise HTTPException(
             status_code=404,
-            detail=f"No commodity table available for mode={mode!r}.",
+            detail=(
+                f"No table available for "
+                f"asset_group={normalized_asset_group!r}, "
+                f"mode={normalized_mode!r}."
+            ),
         )
+
     return table_name
 
 
-def _build_where(
-    name: str,
-    instrument_type: str | None,
-    symbol: str | None,
-    exchange: str | None,
-    expiry: str | None,
+def _build_contract_filters(
+    symbol: str,
+    expiry: str,
     start_time: str | None,
     end_time: str | None,
 ) -> tuple[str, list[Any]]:
-    """Only adds a condition for filters the caller actually passed."""
-    conditions: list[str] = ["name = %s"]
-    params: list[Any] = [name.upper()]
+    """
+    Build filters for a specific symbol + expiry contract.
+    """
 
-    if instrument_type is not None:
-        conditions.append("instrument_type = %s")
-        params.append(instrument_type.lower())
-    if symbol is not None:
-        conditions.append("symbol = %s")
-        params.append(symbol.upper())
-    if exchange is not None:
-        conditions.append("exchange = %s")
-        params.append(exchange.upper())
-    if expiry is not None:
-        conditions.append("expiry = %s")
-        params.append(expiry)
+    conditions: list[str] = [
+        "symbol = %s",
+        "expiry = %s",
+    ]
+
+    params: list[Any] = [
+        symbol.upper(),
+        expiry,
+    ]
+
     if start_time is not None:
-        start_dt, op = _parse_bound(start_time, end=False)
-        conditions.append(f"quote_time {op} %s")
+        start_dt, operator = _parse_bound(
+            start_time,
+            end=False,
+        )
+
+        conditions.append(
+            f"quote_time {operator} %s"
+        )
+
         params.append(start_dt)
+
     if end_time is not None:
-        end_dt, op = _parse_bound(end_time, end=True)
-        conditions.append(f"quote_time {op} %s")
+        end_dt, operator = _parse_bound(
+            end_time,
+            end=True,
+        )
+
+        conditions.append(
+            f"quote_time {operator} %s"
+        )
+
         params.append(end_dt)
 
     return " AND ".join(conditions), params
 
 
 # ============================================================
-# Raw ticks
+# 1. Available Contracts
 # ============================================================
 
-@router.get("/commodity")
-def get_commodity_historical(
-    name: str = Query(..., description="Commodity name. Example: GOLD"),
-    mode: Mode = Query("live", description="Data mode: live or delayed."),
-    instrument_type: str | None = Query(None, description="future, spot or option."),
-    symbol: str | None = Query(None, description="Optional market symbol."),
-    exchange: str | None = Query(None, description="Optional exchange."),
-    expiry: str | None = Query(None, description="Futures expiry, e.g. 20261028."),
+@router.get("/contracts")
+def get_available_contracts(
+    asset_group: AssetGroup = Query(
+        ...,
+        description=(
+            "Asset group. "
+            "Supported values: commodity, currency."
+        ),
+    ),
+    symbol: str = Query(
+        ...,
+        description=(
+            "Market symbol. "
+            "Example: GC."
+        ),
+    ),
+    mode: Mode = Query(
+        "live",
+        description=(
+            "Data mode. "
+            "Supported values: live, delayed."
+        ),
+    ),
+) -> dict[str, Any]:
+    """
+    Get all available expiry contracts for a symbol.
+
+    Returns the latest quote for each expiry.
+
+    Example:
+
+        GET /historical/contracts
+            ?asset_group=commodity
+            &symbol=GC
+            &mode=live
+
+    Response contains one row per expiry.
+    """
+
+    normalized_symbol = symbol.strip().upper()
+
+    if not normalized_symbol:
+        raise HTTPException(
+            status_code=422,
+            detail="symbol cannot be empty.",
+        )
+
+    table_name = _resolve_table(
+        asset_group,
+        mode,
+    )
+
+    sql = f"""
+        SELECT
+            symbol,
+            expiry,
+            instrument_type,
+            exchange,
+            last,
+            bid,
+            ask,
+            quote_time,
+            ticker_time
+        FROM (
+            SELECT
+                symbol,
+                expiry,
+                instrument_type,
+                exchange,
+                last,
+                bid,
+                ask,
+                quote_time,
+                ticker_time,
+
+                ROW_NUMBER() OVER (
+                    PARTITION BY expiry
+                    ORDER BY quote_time DESC
+                ) AS rn
+
+            FROM {table_name}
+
+            WHERE symbol = %s
+              AND expiry IS NOT NULL
+        )
+
+        WHERE rn = 1
+
+        ORDER BY expiry ASC
+    """
+
+    rows = _run_query(
+        sql,
+        (normalized_symbol,),
+    )
+
+    rows = _to_ist(rows)
+
+    return {
+        "asset_group": asset_group,
+        "mode": mode,
+        "symbol": normalized_symbol,
+        "count": len(rows),
+        "data": rows,
+    }
+
+
+# ============================================================
+# 2. Chart Historical Data
+# ============================================================
+
+@router.get("/chart")
+def get_chart_history(
+    asset_group: AssetGroup = Query(
+        ...,
+        description=(
+            "Asset group. "
+            "Supported values: commodity, currency."
+        ),
+    ),
+    symbol: str = Query(
+        ...,
+        description="Market symbol. Example: GC.",
+    ),
+    expiry: str = Query(
+        ...,
+        description="Contract expiry. Example: 20261229.",
+    ),
+    mode: Mode = Query(
+        "live",
+        description=(
+            "Data mode. "
+            "Supported values: live, delayed."
+        ),
+    ),
     start_time: str | None = Query(
-        None, description="quote_time >= start. 'YYYY-MM-DD' (IST day) or ISO timestamp."
+        None,
+        description=(
+            "Start date/time. "
+            "Example: 2026-10-01."
+        ),
     ),
     end_time: str | None = Query(
-        None, description="'YYYY-MM-DD' = through the END of that IST day, or ISO timestamp."
+        None,
+        description=(
+            "End date/time. "
+            "Example: 2026-10-05."
+        ),
+    ),
+    interval: str = Query(
+        "5m",
+        description=(
+            "Chart interval. "
+            "Supported: 1s, 10s, 1m, 5m, "
+            "15m, 1h, 1d."
+        ),
+    ),
+    limit: int = Query(
+        5000,
+        ge=1,
+        le=MAX_LIMIT,
+        description="Maximum number of candles.",
+    ),
+) -> dict[str, Any]:
+    """
+    Get OHLC chart data for one specific symbol + expiry.
+
+    Example:
+
+        GET /historical/chart
+            ?asset_group=commodity
+            &symbol=GC
+            &expiry=20261229
+            &mode=live
+            &interval=5m
+
+    Returns oldest -> newest candles.
+    """
+
+    normalized_symbol = symbol.strip().upper()
+    normalized_expiry = expiry.strip()
+
+    if not normalized_symbol:
+        raise HTTPException(
+            status_code=422,
+            detail="symbol cannot be empty.",
+        )
+
+    if not normalized_expiry:
+        raise HTTPException(
+            status_code=422,
+            detail="expiry cannot be empty.",
+        )
+
+    if interval not in _INTERVALS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "interval must be one of "
+                f"{sorted(_INTERVALS)}"
+            ),
+        )
+
+    table_name = _resolve_table(
+        asset_group,
+        mode,
+    )
+
+    conditions: list[str] = [
+        "symbol = %s",
+        "expiry = %s",
+    ]
+
+    params: list[Any] = [
+        normalized_symbol,
+        normalized_expiry,
+    ]
+
+    # --------------------------------------------------------
+    # Start time
+    # --------------------------------------------------------
+
+    if start_time is not None:
+        start_dt, operator = _parse_bound(
+            start_time,
+            end=False,
+        )
+
+        conditions.append(
+            f"quote_time {operator} %s"
+        )
+
+        params.append(start_dt)
+
+    # --------------------------------------------------------
+    # End time
+    # --------------------------------------------------------
+
+    if end_time is not None:
+        end_dt, operator = _parse_bound(
+            end_time,
+            end=True,
+        )
+
+        conditions.append(
+            f"quote_time {operator} %s"
+        )
+
+        params.append(end_dt)
+
+    where = " AND ".join(conditions)
+
+    sql = f"""
+        SELECT
+            quote_time,
+
+            first("last") AS open,
+
+            max("last") AS high,
+
+            min("last") AS low,
+
+            last("last") AS close,
+
+            last(bid) AS bid,
+
+            last(ask) AS ask,
+
+            count() AS ticks
+
+        FROM {table_name}
+
+        WHERE {where}
+
+        SAMPLE BY {interval}
+        ALIGN TO CALENDAR
+
+        ORDER BY quote_time ASC
+
+        LIMIT %s
+    """
+
+    params.append(limit)
+
+    rows = _run_query(
+        sql,
+        tuple(params),
+    )
+
+    rows = _to_ist(rows)
+
+    return {
+        "asset_group": asset_group,
+        "mode": mode,
+        "symbol": normalized_symbol,
+        "expiry": normalized_expiry,
+        "interval": interval,
+        "count": len(rows),
+        "data": rows,
+    }
+
+
+# ============================================================
+# 3. Individual Contract Historical Data
+# ============================================================
+
+@router.get("/instrument")
+def get_instrument_history(
+    asset_group: AssetGroup = Query(
+        ...,
+        description=(
+            "Asset group. "
+            "Supported values: commodity, currency."
+        ),
+    ),
+    symbol: str = Query(
+        ...,
+        description="Market symbol. Example: GC.",
+    ),
+    expiry: str = Query(
+        ...,
+        description="Contract expiry. Example: 20261229.",
+    ),
+    mode: Mode = Query(
+        "live",
+        description=(
+            "Data mode. "
+            "Supported values: live, delayed."
+        ),
+    ),
+    start_time: str | None = Query(
+        None,
+        description="Start date/time.",
+    ),
+    end_time: str | None = Query(
+        None,
+        description="End date/time.",
     ),
     order: Order = Query(
-        "desc",
-        description="desc = newest first (default, unchanged). asc = oldest first, for charts.",
+        "asc",
+        description=(
+            "Data order. "
+            "asc = oldest first, "
+            "desc = newest first."
+        ),
     ),
-    limit: int = Query(5000, ge=1, le=MAX_LIMIT, description="Maximum rows."),
-) -> list[dict[str, Any]]:
-    """To page through a long range oldest -> newest, use order=asc and pass the
-    last row's quote_time as the next start_time (drop the first row of the next
-    page, it repeats)."""
-    table_name = _resolve_table(mode)
-    where, params = _build_where(
-        name, instrument_type, symbol, exchange, expiry, start_time, end_time
+    limit: int = Query(
+        5000,
+        ge=1,
+        le=MAX_LIMIT,
+        description="Maximum number of historical ticks.",
+    ),
+) -> dict[str, Any]:
+    """
+    Get raw historical tick data for one specific
+    symbol + expiry contract.
+
+    Example:
+
+        GET /historical/instrument
+            ?asset_group=commodity
+            &symbol=GC
+            &expiry=20261229
+            &mode=live
+
+    Returns raw tick-level data.
+    """
+
+    normalized_symbol = symbol.strip().upper()
+    normalized_expiry = expiry.strip()
+
+    if not normalized_symbol:
+        raise HTTPException(
+            status_code=422,
+            detail="symbol cannot be empty.",
+        )
+
+    if not normalized_expiry:
+        raise HTTPException(
+            status_code=422,
+            detail="expiry cannot be empty.",
+        )
+
+    table_name = _resolve_table(
+        asset_group,
+        mode,
+    )
+
+    where, params = _build_contract_filters(
+        symbol=normalized_symbol,
+        expiry=normalized_expiry,
+        start_time=start_time,
+        end_time=end_time,
     )
 
     sql = f"""
         SELECT *
         FROM {table_name}
+
         WHERE {where}
+
         ORDER BY quote_time {order.upper()}
+
         LIMIT %s
     """
+
     params.append(limit)
 
-    return _to_ist(_run_query(sql, tuple(params)))
-
-
-# ============================================================
-# Chart candles (open/high/low/close per interval)
-# ============================================================
-
-@router.get("/commodity/ohlc")
-def get_commodity_ohlc(
-    name: str = Query(..., description="Commodity name. Example: GOLD"),
-    mode: Mode = Query("live", description="Data mode: live or delayed."),
-    instrument_type: str | None = Query(None, description="future, spot or option."),
-    symbol: str | None = Query(None, description="Optional market symbol."),
-    exchange: str | None = Query(None, description="Optional exchange."),
-    expiry: str | None = Query(None, description="Futures expiry. Required for futures."),
-    start_time: str | None = Query(None, description="'YYYY-MM-DD' (IST day) or ISO timestamp."),
-    end_time: str | None = Query(None, description="'YYYY-MM-DD' (through end of that day) or ISO."),
-    interval: str = Query("1m", description="1s, 10s, 1m, 5m, 15m, 1h or 1d."),
-    limit: int = Query(5000, ge=1, le=MAX_LIMIT, description="Maximum candles."),
-) -> list[dict[str, Any]]:
-    """Oldest -> newest candles of `last` price, plus the closing bid/ask."""
-    if interval not in _INTERVALS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"interval must be one of {sorted(_INTERVALS)}",
-        )
-    if (instrument_type or "").lower() == "future" and expiry is None:
-        raise HTTPException(
-            status_code=422,
-            detail="expiry is required for futures, otherwise contracts are mixed.",
-        )
-
-    table_name = _resolve_table(mode)
-    where, params = _build_where(
-        name, instrument_type, symbol, exchange, expiry, start_time, end_time
+    rows = _run_query(
+        sql,
+        tuple(params),
     )
 
-    sql = f"""
-        SELECT
-            quote_time,
-            first("last") AS open,
-            max("last")   AS high,
-            min("last")   AS low,
-            last("last")  AS close,
-            last(bid)     AS bid,
-            last(ask)     AS ask,
-            count()       AS ticks
-        FROM {table_name}
-        WHERE {where}
-        SAMPLE BY {interval} ALIGN TO CALENDAR
-        LIMIT %s
-    """
-    params.append(limit)
+    rows = _to_ist(rows)
 
-    return _to_ist(_run_query(sql, tuple(params)))
+    return {
+        "asset_group": asset_group,
+        "mode": mode,
+        "symbol": normalized_symbol,
+        "expiry": normalized_expiry,
+        "order": order,
+        "count": len(rows),
+        "data": rows,
+    }
