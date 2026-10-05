@@ -468,35 +468,34 @@ def get_chart_history(
     ),
     start_time: str | None = Query(
         None,
-        description=(
-            "Start date/time. "
-            "Example: 2026-10-01."
-        ),
+        description="Start date/time.",
     ),
     end_time: str | None = Query(
         None,
-        description=(
-            "End date/time. "
-            "Example: 2026-10-05."
-        ),
+        description="End date/time.",
     ),
-    interval: str = Query(
-        "5m",
+    order: Order = Query(
+        "asc",
         description=(
-            "Chart interval. "
-            "Supported: 1s, 10s, 1m, 5m, "
-            "15m, 1h, 1d."
+            "Data order. "
+            "asc = oldest first, "
+            "desc = newest first."
         ),
     ),
     limit: int = Query(
-        5000,
+        MAX_LIMIT,
         ge=1,
         le=MAX_LIMIT,
-        description="Maximum number of candles.",
+        description="Maximum number of rows.",
     ),
 ) -> dict[str, Any]:
     """
-    Get OHLC chart data for one specific symbol + expiry.
+    Get complete raw historical data for one specific
+    symbol + expiry contract.
+
+    No aggregation is performed.
+
+    Every database row is returned.
 
     Example:
 
@@ -505,9 +504,8 @@ def get_chart_history(
             &symbol=GC
             &expiry=20261229
             &mode=live
-            &interval=5m
 
-    Returns oldest -> newest candles.
+    Returns the same raw data structure as the database.
     """
 
     normalized_symbol = symbol.strip().upper()
@@ -523,15 +521,6 @@ def get_chart_history(
         raise HTTPException(
             status_code=422,
             detail="expiry cannot be empty.",
-        )
-
-    if interval not in _INTERVALS:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "interval must be one of "
-                f"{sorted(_INTERVALS)}"
-            ),
         )
 
     table_name = _resolve_table(
@@ -584,32 +573,10 @@ def get_chart_history(
     where = " AND ".join(conditions)
 
     sql = f"""
-        SELECT
-            quote_time,
-
-            first("last") AS open,
-
-            max("last") AS high,
-
-            min("last") AS low,
-
-            last("last") AS close,
-
-            last(bid) AS bid,
-
-            last(ask) AS ask,
-
-            count() AS ticks
-
+        SELECT *
         FROM {table_name}
-
         WHERE {where}
-
-        SAMPLE BY {interval}
-        ALIGN TO CALENDAR
-
-        ORDER BY quote_time ASC
-
+        ORDER BY quote_time {order.upper()}
         LIMIT %s
     """
 
@@ -627,11 +594,10 @@ def get_chart_history(
         "mode": mode,
         "symbol": normalized_symbol,
         "expiry": normalized_expiry,
-        "interval": interval,
+        "order": order,
         "count": len(rows),
         "data": rows,
     }
-
 
 # ============================================================
 # 3. Individual Contract Historical Data
@@ -641,10 +607,7 @@ def get_chart_history(
 def get_instrument_history(
     asset_group: AssetGroup = Query(
         ...,
-        description=(
-            "Asset group. "
-            "Supported values: commodity, currency."
-        ),
+        description="Asset group: commodity or currency.",
     ),
     symbol: str = Query(
         ...,
@@ -656,47 +619,28 @@ def get_instrument_history(
     ),
     mode: Mode = Query(
         "live",
-        description=(
-            "Data mode. "
-            "Supported values: live, delayed."
-        ),
-    ),
-    start_time: str | None = Query(
-        None,
-        description="Start date/time.",
-    ),
-    end_time: str | None = Query(
-        None,
-        description="End date/time.",
+        description="Data mode: live or delayed.",
     ),
     order: Order = Query(
         "asc",
-        description=(
-            "Data order. "
-            "asc = oldest first, "
-            "desc = newest first."
-        ),
+        description="asc = oldest first, desc = newest first.",
     ),
     limit: int = Query(
-        5000,
+        MAX_LIMIT,
         ge=1,
         le=MAX_LIMIT,
-        description="Maximum number of historical ticks.",
+        description="Maximum number of rows.",
     ),
 ) -> dict[str, Any]:
     """
-    Get raw historical tick data for one specific
+    Get complete raw historical data for one specific
     symbol + expiry contract.
 
-    Example:
+    No date filtering.
+    No interval.
+    No aggregation.
 
-        GET /historical/instrument
-            ?asset_group=commodity
-            &symbol=GC
-            &expiry=20261229
-            &mode=live
-
-    Returns raw tick-level data.
+    Returns the raw database rows.
     """
 
     normalized_symbol = symbol.strip().upper()
@@ -719,29 +663,22 @@ def get_instrument_history(
         mode,
     )
 
-    where, params = _build_contract_filters(
-        symbol=normalized_symbol,
-        expiry=normalized_expiry,
-        start_time=start_time,
-        end_time=end_time,
-    )
-
     sql = f"""
         SELECT *
         FROM {table_name}
-
-        WHERE {where}
-
+        WHERE symbol = %s
+          AND expiry = %s
         ORDER BY quote_time {order.upper()}
-
         LIMIT %s
     """
 
-    params.append(limit)
-
     rows = _run_query(
         sql,
-        tuple(params),
+        (
+            normalized_symbol,
+            normalized_expiry,
+            limit,
+        ),
     )
 
     rows = _to_ist(rows)
