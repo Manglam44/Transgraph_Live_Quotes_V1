@@ -653,9 +653,16 @@ def get_instrument_history(
 
     No aggregation is performed.
 
-    Pagination is handled directly by QuestDB using:
+    Parameters:
 
-        LIMIT offset, page_size
+        symbol
+        expiry
+        mode
+        from
+        to
+        page
+        page_size
+        order
 
     Defaults:
 
@@ -663,11 +670,21 @@ def get_instrument_history(
         page_size=500
         order=desc
 
-    Optional date filtering:
+    Example:
 
-        from=2026-10-01
-        to=2026-10-06
+        /historical/instrument
+        ?asset_group=commodity
+        &symbol=GC
+        &expiry=20261229
+        &mode=live
+        &page=1
+        &page_size=500
+        &order=desc
     """
+
+    # ========================================================
+    # Normalize parameters
+    # ========================================================
 
     normalized_symbol = symbol.strip().upper()
     normalized_expiry = expiry.strip()
@@ -684,13 +701,17 @@ def get_instrument_history(
             detail="expiry cannot be empty.",
         )
 
+    # ========================================================
+    # Resolve QuestDB table
+    # ========================================================
+
     table_name = _resolve_table(
         asset_group,
         mode,
     )
 
     # ========================================================
-    # WHERE conditions
+    # Build filters
     # ========================================================
 
     conditions: list[str] = [
@@ -704,33 +725,33 @@ def get_instrument_history(
     ]
 
     # ========================================================
-    # From date
+    # From filter
     # ========================================================
 
     if from_time is not None:
-        from_dt, from_operator = _parse_bound(
+        from_dt, operator = _parse_bound(
             from_time,
             end=False,
         )
 
         conditions.append(
-            f"quote_time {from_operator} %s"
+            f"quote_time {operator} %s"
         )
 
         params.append(from_dt)
 
     # ========================================================
-    # To date
+    # To filter
     # ========================================================
 
     if to_time is not None:
-        to_dt, to_operator = _parse_bound(
+        to_dt, operator = _parse_bound(
             to_time,
             end=True,
         )
 
         conditions.append(
-            f"quote_time {to_operator} %s"
+            f"quote_time {operator} %s"
         )
 
         params.append(to_dt)
@@ -740,41 +761,52 @@ def get_instrument_history(
     # ========================================================
     # Pagination
     # ========================================================
-    #
-    # QuestDB does NOT support:
-    #
-    #     LIMIT %s OFFSET %s
-    #
-    # QuestDB uses:
-    #
-    #     LIMIT offset, limit
-    #
-    # ========================================================
 
     offset = (page - 1) * page_size
 
+    start_row = offset
+    end_row = offset + page_size
+
     # ========================================================
-    # Data query
+    # Fetch paginated data
+    #
+    # IMPORTANT:
+    # QuestDB pagination through OFFSET was returning empty
+    # pages in the current implementation.
+    #
+    # Therefore we use ROW_NUMBER() here.
     # ========================================================
 
     data_sql = f"""
         SELECT *
-        FROM {table_name}
-        WHERE {where}
-        ORDER BY quote_time {order.upper()}
-        LIMIT %s, %s
+        FROM (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (
+                    ORDER BY quote_time {order.upper()}
+                ) AS row_num
+            FROM {table_name}
+            WHERE {where}
+        )
+        WHERE row_num > %s
+          AND row_num <= %s
+        ORDER BY row_num
     """
 
     data_params = [
         *params,
-        offset,
-        page_size,
+        start_row,
+        end_row,
     ]
 
     rows = _run_query(
         data_sql,
         tuple(data_params),
     )
+
+    # Remove internal pagination column
+    for row in rows:
+        row.pop("row_num", None)
 
     rows = _to_ist(rows)
 
@@ -798,6 +830,10 @@ def get_instrument_history(
         if count_rows
         else 0
     )
+
+    # ========================================================
+    # Pagination metadata
+    # ========================================================
 
     total_pages = (
         (total + page_size - 1) // page_size
