@@ -621,26 +621,65 @@ def get_instrument_history(
         "live",
         description="Data mode: live or delayed.",
     ),
-    order: Order = Query(
-        "asc",
-        description="asc = oldest first, desc = newest first.",
+    from_time: str | None = Query(
+        None,
+        alias="from",
+        description=(
+            "Optional start date/time. "
+            "Example: 2026-10-01."
+        ),
     ),
-    limit: int = Query(
-        MAX_LIMIT,
+    to_time: str | None = Query(
+        None,
+        alias="to",
+        description=(
+            "Optional end date/time. "
+            "Example: 2026-10-06."
+        ),
+    ),
+    page: int = Query(
+        1,
+        ge=1,
+        description="Page number. Default: 1.",
+    ),
+    page_size: int = Query(
+        500,
         ge=1,
         le=MAX_LIMIT,
-        description="Maximum number of rows.",
+        description="Rows per page. Default: 500.",
+    ),
+    order: Order = Query(
+        "desc",
+        description=(
+            "Data order. "
+            "desc = newest first, "
+            "asc = oldest first."
+        ),
     ),
 ) -> dict[str, Any]:
     """
-    Get complete raw historical data for one specific
-    symbol + expiry contract.
+    Get paginated raw historical tick data for one
+    specific symbol + expiry contract.
 
-    No date filtering.
-    No interval.
-    No aggregation.
+    Pagination is performed directly by QuestDB.
 
-    Returns the raw database rows.
+    Example:
+
+        GET /historical/instrument
+            ?asset_group=commodity
+            &symbol=GC
+            &expiry=20261229
+            &mode=live
+            &page=1
+            &page_size=500
+            &order=desc
+
+    Optional date range:
+
+        from=2026-10-01
+        to=2026-10-06
+
+    No aggregation is performed.
     """
 
     normalized_symbol = symbol.strip().upper()
@@ -663,32 +702,132 @@ def get_instrument_history(
         mode,
     )
 
-    sql = f"""
+    # --------------------------------------------------------
+    # Build WHERE conditions
+    # --------------------------------------------------------
+
+    conditions: list[str] = [
+        "symbol = %s",
+        "expiry = %s",
+    ]
+
+    params: list[Any] = [
+        normalized_symbol,
+        normalized_expiry,
+    ]
+
+    # --------------------------------------------------------
+    # Optional from filter
+    # --------------------------------------------------------
+
+    if from_time is not None:
+        from_dt, from_operator = _parse_bound(
+            from_time,
+            end=False,
+        )
+
+        conditions.append(
+            f"quote_time {from_operator} %s"
+        )
+
+        params.append(from_dt)
+
+    # --------------------------------------------------------
+    # Optional to filter
+    # --------------------------------------------------------
+
+    if to_time is not None:
+        to_dt, to_operator = _parse_bound(
+            to_time,
+            end=True,
+        )
+
+        conditions.append(
+            f"quote_time {to_operator} %s"
+        )
+
+        params.append(to_dt)
+
+    where = " AND ".join(conditions)
+
+    # --------------------------------------------------------
+    # Pagination
+    # --------------------------------------------------------
+
+    offset = (page - 1) * page_size
+
+    # --------------------------------------------------------
+    # Data query
+    # --------------------------------------------------------
+
+    data_sql = f"""
         SELECT *
         FROM {table_name}
-        WHERE symbol = %s
-          AND expiry = %s
+        WHERE {where}
         ORDER BY quote_time {order.upper()}
         LIMIT %s
+        OFFSET %s
     """
 
+    data_params = [
+        *params,
+        page_size,
+        offset,
+    ]
+
     rows = _run_query(
-        sql,
-        (
-            normalized_symbol,
-            normalized_expiry,
-            limit,
-        ),
+        data_sql,
+        tuple(data_params),
     )
 
     rows = _to_ist(rows)
+
+    # --------------------------------------------------------
+    # Total count
+    # --------------------------------------------------------
+
+    count_sql = f"""
+        SELECT count() AS total
+        FROM {table_name}
+        WHERE {where}
+    """
+
+    count_rows = _run_query(
+        count_sql,
+        tuple(params),
+    )
+
+    total = (
+        int(count_rows[0]["total"])
+        if count_rows
+        else 0
+    )
+
+    total_pages = (
+        (total + page_size - 1) // page_size
+        if total > 0
+        else 0
+    )
 
     return {
         "asset_group": asset_group,
         "mode": mode,
         "symbol": normalized_symbol,
         "expiry": normalized_expiry,
+
+        "from": from_time,
+        "to": to_time,
+
+        "page": page,
+        "page_size": page_size,
         "order": order,
+
         "count": len(rows),
+        "total": total,
+        "total_pages": total_pages,
+
+        "has_next": page < total_pages,
+        "has_previous": page > 1,
+
         "data": rows,
     }
