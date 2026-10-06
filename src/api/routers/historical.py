@@ -624,18 +624,12 @@ def get_instrument_history(
     from_time: str | None = Query(
         None,
         alias="from",
-        description=(
-            "Optional start date/time. "
-            "Example: 2026-10-01."
-        ),
+        description="Optional start date/time. Example: 2026-10-01.",
     ),
     to_time: str | None = Query(
         None,
         alias="to",
-        description=(
-            "Optional end date/time. "
-            "Example: 2026-10-06."
-        ),
+        description="Optional end date/time. Example: 2026-10-06.",
     ),
     page: int = Query(
         1,
@@ -650,36 +644,29 @@ def get_instrument_history(
     ),
     order: Order = Query(
         "desc",
-        description=(
-            "Data order. "
-            "desc = newest first, "
-            "asc = oldest first."
-        ),
+        description="desc = newest first, asc = oldest first.",
     ),
 ) -> dict[str, Any]:
     """
     Get paginated raw historical tick data for one
     specific symbol + expiry contract.
 
-    Pagination is performed directly by QuestDB.
+    No aggregation is performed.
 
-    Example:
+    Pagination is handled directly by QuestDB using:
 
-        GET /historical/instrument
-            ?asset_group=commodity
-            &symbol=GC
-            &expiry=20261229
-            &mode=live
-            &page=1
-            &page_size=500
-            &order=desc
+        LIMIT offset, page_size
 
-    Optional date range:
+    Defaults:
+
+        page=1
+        page_size=500
+        order=desc
+
+    Optional date filtering:
 
         from=2026-10-01
         to=2026-10-06
-
-    No aggregation is performed.
     """
 
     normalized_symbol = symbol.strip().upper()
@@ -702,9 +689,9 @@ def get_instrument_history(
         mode,
     )
 
-    # --------------------------------------------------------
-    # Build WHERE conditions
-    # --------------------------------------------------------
+    # ========================================================
+    # WHERE conditions
+    # ========================================================
 
     conditions: list[str] = [
         "symbol = %s",
@@ -716,9 +703,9 @@ def get_instrument_history(
         normalized_expiry,
     ]
 
-    # --------------------------------------------------------
-    # Optional from filter
-    # --------------------------------------------------------
+    # ========================================================
+    # From date
+    # ========================================================
 
     if from_time is not None:
         from_dt, from_operator = _parse_bound(
@@ -732,9 +719,9 @@ def get_instrument_history(
 
         params.append(from_dt)
 
-    # --------------------------------------------------------
-    # Optional to filter
-    # --------------------------------------------------------
+    # ========================================================
+    # To date
+    # ========================================================
 
     if to_time is not None:
         to_dt, to_operator = _parse_bound(
@@ -750,29 +737,38 @@ def get_instrument_history(
 
     where = " AND ".join(conditions)
 
-    # --------------------------------------------------------
+    # ========================================================
     # Pagination
-    # --------------------------------------------------------
+    # ========================================================
+    #
+    # QuestDB does NOT support:
+    #
+    #     LIMIT %s OFFSET %s
+    #
+    # QuestDB uses:
+    #
+    #     LIMIT offset, limit
+    #
+    # ========================================================
 
     offset = (page - 1) * page_size
 
-    # --------------------------------------------------------
+    # ========================================================
     # Data query
-    # --------------------------------------------------------
+    # ========================================================
 
     data_sql = f"""
         SELECT *
         FROM {table_name}
         WHERE {where}
         ORDER BY quote_time {order.upper()}
-        LIMIT %s
-        OFFSET %s
+        LIMIT %s, %s
     """
 
     data_params = [
         *params,
-        page_size,
         offset,
+        page_size,
     ]
 
     rows = _run_query(
@@ -782,9 +778,9 @@ def get_instrument_history(
 
     rows = _to_ist(rows)
 
-    # --------------------------------------------------------
+    # ========================================================
     # Total count
-    # --------------------------------------------------------
+    # ========================================================
 
     count_sql = f"""
         SELECT count() AS total
